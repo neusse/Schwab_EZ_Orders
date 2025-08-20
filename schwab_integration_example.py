@@ -147,7 +147,7 @@ class SchwabEZTrader:
             accounts = self.client.get_account_numbers()
             if accounts.json():
                 # Use first account by default
-                print(accounts.json())
+                #print(accounts.json())
                 self.account_hash = accounts.json()[0]['hashValue']
                 if self.console:
                     self.console.print(f"✅ Connected to account: {self.account_hash[:8]}...")
