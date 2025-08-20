@@ -1,7 +1,7 @@
 {
-  "name": "test_template",
-  "description": "Test template",
-  "created": "2025-08-19T21:55:45.277078",
+  "name": "spy_dca",
+  "description": "SPY Dollar Cost Averaging",
+  "created": "2025-08-19T21:54:59.327255",
   "legs": [
     {
       "action": "BUY",

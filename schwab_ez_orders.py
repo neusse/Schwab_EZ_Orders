@@ -42,7 +42,7 @@ except ImportError:
     Console = None
 
 # Import our custom modules
-from schwab_order_builder import OrderBuilder, ValidationError, quick_buy, quick_sell
+from schwab_order_builder import OrderBuilder, ValidationError, quick_buy, quick_sell, OrderAction
 from schwab_strategies import (
     StrategyFactory, CoveredCall, ProtectivePut, BullCallSpread, 
     BearPutSpread, IronCondor, Straddle, Strangle

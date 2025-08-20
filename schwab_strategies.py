@@ -12,7 +12,7 @@ This module provides strategy builders for common options strategies:
 """
 
 from typing import Optional, List, Dict, Any
-from schwab_order_builder import OrderBuilder, StrategyBuilder
+from schwab_order_builder import OrderBuilder, OrderAction, StrategyBuilder
 
 try:
     from rich.console import Console
