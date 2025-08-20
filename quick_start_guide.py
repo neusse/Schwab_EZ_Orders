@@ -13,42 +13,89 @@ Setup Steps:
     3. Start trading with simple commands
 """
 
-from schwab_ez_orders import EZOrders, EZConfig
-from schwab_integration_example import SchwabEZTrader, setup_schwab_config
+# Try to import our modules, handle gracefully if not available
+try:
+    from schwab_ez_orders import EZOrders, EZConfig
+    EZ_ORDERS_AVAILABLE = True
+except ImportError as e:
+    print(f"❌ EZ Orders not available: {e}")
+    EZ_ORDERS_AVAILABLE = False
+
+try:
+    from schwab_integration_example import SchwabEZTrader, setup_schwab_config
+    INTEGRATION_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️  Integration module not fully available: {e}")
+    INTEGRATION_AVAILABLE = False
 
 def quick_setup():
     """Quick setup process for new users"""
     print("🚀 EZ Schwab Orders - Quick Setup")
     print("=" * 40)
     
-    # Step 1: Setup credentials
-    print("\nStep 1: Setup Schwab API credentials")
-    try:
-        config = setup_schwab_config()
-        print("✅ Credentials configured")
-    except Exception as e:
-        print(f"❌ Setup failed: {e}")
-        return False
-    
-    # Step 2: Test connection (would fail without real credentials)
-    print("\nStep 2: Testing connection...")
-    try:
-        trader = SchwabEZTrader(
-            token_file=config["token_file"],
-            api_key=config["api_key"], 
-            app_secret=config["app_secret"]
-        )
-        print("✅ Connected successfully")
-        return trader
-    except Exception as e:
-        print(f"⚠️  Connection test failed (expected): {e}")
-        print("   This is normal for demo - real credentials needed for live trading")
+    if not INTEGRATION_AVAILABLE:
+        print("❌ Integration module not available")
+        print("   Make sure all files are in the same directory:")
+        print("   - schwab_order_builder.py")
+        print("   - schwab_ez_orders.py") 
+        print("   - schwab_integration_example.py")
         return None
+    
+    # Import here to avoid issues if module not available
+    from schwab_integration_example import (
+        check_env_setup, create_trader_from_env, 
+        setup_env_vars_interactively, setup_schwab_config
+    )
+    
+    # Step 1: Check environment variables first
+    print("\nStep 1: Checking environment variables...")
+    env_status = check_env_setup()
+    
+    required_vars = ['SCHWAB_API_KEY', 'SCHWAB_APP_SECRET', 'SCHWAB_TOKEN_PATH']
+    all_required_set = all(env_status[var] for var in required_vars)
+    
+    if all_required_set:
+        print("✅ Environment variables are set!")
+        try:
+            trader = create_trader_from_env()
+            print("✅ Connected successfully using environment variables")
+            return trader
+        except Exception as e:
+            print(f"❌ Connection failed: {e}")
+            return None
+    else:
+        print("⚠️  Environment variables not set")
+        print("\nChoose setup method:")
+        print("1. Environment variables (recommended)")
+        print("2. Config file (legacy)")
+        
+        choice = input("Enter choice (1 or 2): ").strip()
+        
+        if choice == "1":
+            print("\nSetting up environment variables...")
+            setup_env_vars_interactively()
+            print("\n💡 After setting environment variables, restart and run:")
+            print("   from schwab_integration_example import create_trader_from_env")
+            print("   trader = create_trader_from_env()")
+            return None
+        else:
+            print("\nUsing config file setup...")
+            try:
+                config = setup_schwab_config()
+                print("✅ Credentials configured in file")
+                return None  # Would need real credentials to actually connect
+            except Exception as e:
+                print(f"❌ Setup failed: {e}")
+                return None
 
 def basic_examples():
     """Show basic order examples"""
     print("\n📚 Basic Order Examples")
     print("=" * 30)
+    
+    if not EZ_ORDERS_AVAILABLE:
+        print("❌ EZ Orders module not available")
+        return
     
     # Create EZ Orders instance
     ez = EZOrders(EZConfig(require_confirmation=False))
@@ -57,16 +104,16 @@ def basic_examples():
     print("\n1. Simple Stock Orders:")
     
     # Buy order
-    buy_order = ez.buy('AAPL', 100, limit=150.50)
+    buy_order = ez.buy('AAPL', 1, limit=150.50)
     print(f"   Buy: {buy_order}")
-    print(f"   JSON: {buy_order.build()}\n")
+    print(f"   JSON keys: {list(buy_order.build().keys())}\n")
     
     # Stop loss
-    stop_order = ez.stop_loss('AAPL', 100, stop_price=140.00)
+    stop_order = ez.stop_loss('AAPL', 1, stop_price=140.00)
     print(f"   Stop Loss: {stop_order}")
     
     # Trailing stop
-    trail_order = ez.trailing_stop_loss('AAPL', 100, trail_amount=5.00)
+    trail_order = ez.trailing_stop_loss('AAPL', 1, trail_amount=5.00)
     print(f"   Trailing Stop: {trail_order}")
     
     print("\n2. Options Orders:")
@@ -88,6 +135,10 @@ def strategy_examples():
     """Show strategy examples"""
     print("\n🎯 Strategy Examples")
     print("=" * 25)
+    
+    if not EZ_ORDERS_AVAILABLE:
+        print("❌ EZ Orders module not available")
+        return
     
     ez = EZOrders(EZConfig(require_confirmation=False))
     
@@ -128,6 +179,10 @@ def advanced_features():
     """Show advanced features"""
     print("\n🔥 Advanced Features")
     print("=" * 25)
+    
+    if not EZ_ORDERS_AVAILABLE:
+        print("❌ EZ Orders module not available")
+        return
     
     # Template system
     print("\n1. Template System:")
@@ -197,8 +252,20 @@ def main():
     print("A simplified, safe way to trade with Schwab")
     print("=" * 50)
     
+    # Check if modules are available
+    if not EZ_ORDERS_AVAILABLE:
+        print("❌ Core modules not available. Please ensure all files are present:")
+        print("   - schwab_order_builder.py")
+        print("   - schwab_ez_orders.py")
+        print("   - schwab_strategies.py")
+        return
+    
     # Setup
-    trader = quick_setup()
+    trader = None
+    if INTEGRATION_AVAILABLE:
+        trader = quick_setup()
+    else:
+        print("\n⚠️  Integration example not available - showing basic functionality only")
     
     # Examples
     basic_examples()
@@ -230,10 +297,29 @@ def main():
     print("- schwab_ez_orders.py - Main interface")
     print("- schwab_integration_example.py - Live trading")
     
+    print("\n🛠️  Helper Scripts:")
+    print("- test_installation.py - Test all functionality")
+    print("- setup_env_example.py - Set up environment variables")
+    print("- quick_start_guide.py - This guide with examples")
+    
     if trader:
         print(f"\n✅ You're connected and ready to trade!")
     else:
         print(f"\n⚠️  Set up credentials to start live/paper trading")
+        if INTEGRATION_AVAILABLE:
+            print("   Run: python setup_env_example.py")
+        
+    # Show module status
+    print(f"\n📊 Module Status:")
+    print(f"   EZ Orders: {'✅' if EZ_ORDERS_AVAILABLE else '❌'}")
+    print(f"   Integration: {'✅' if INTEGRATION_AVAILABLE else '❌'}")
+    
+    if not all([EZ_ORDERS_AVAILABLE, INTEGRATION_AVAILABLE]):
+        print(f"\n💡 To fix import issues:")
+        print(f"   1. Make sure all .py files are in the same directory")
+        print(f"   2. Install dependencies: pip install rich")
+        print(f"   3. For full functionality: pip install schwab-py")
+        print(f"   4. Test setup: python test_installation.py")
 
 if __name__ == "__main__":
     main()

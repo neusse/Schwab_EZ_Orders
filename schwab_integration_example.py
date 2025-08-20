@@ -22,6 +22,7 @@ from typing import Optional, Dict, Any
 try:
     import schwab
     from schwab.client import Client
+    from schwab import auth
     SCHWAB_PY_AVAILABLE = True
 except ImportError:
     SCHWAB_PY_AVAILABLE = False
@@ -39,6 +40,7 @@ except ImportError:
 
 # Import our EZ Orders system
 from schwab_ez_orders import EZOrders, EZConfig
+from schwab_order_builder import OrderBuilder
 
 
 class SchwabEZTrader:
@@ -54,7 +56,8 @@ class SchwabEZTrader:
                  token_file: Optional[str] = None,
                  api_key: Optional[str] = None,
                  app_secret: Optional[str] = None,
-                 config: Optional[EZConfig] = None):
+                 config: Optional[EZConfig] = None,
+                 auto_load_credentials: bool = True):
         """
         Initialize the trader
         
@@ -64,6 +67,7 @@ class SchwabEZTrader:
             api_key: Schwab API key
             app_secret: Schwab app secret
             config: EZ Orders configuration
+            auto_load_credentials: If True, try to load from environment first
         """
         
         if not SCHWAB_PY_AVAILABLE:
@@ -72,13 +76,40 @@ class SchwabEZTrader:
         self.console = Console() if RICH_AVAILABLE else None
         self.config = config or EZConfig()
         
+        # Try to get credentials from environment if not provided
+        if auto_load_credentials and not client:
+            env_credentials = self._load_credentials_from_env()
+            
+            # Use environment credentials if available and not overridden
+            if env_credentials['api_key'] and not api_key:
+                api_key = env_credentials['api_key']
+            if env_credentials['app_secret'] and not app_secret:
+                app_secret = env_credentials['app_secret'] 
+            if env_credentials['token_path'] and not token_file:
+                token_file = env_credentials['token_path']
+        
         # Initialize Schwab client
         if client:
             self.client = client
         elif token_file and api_key and app_secret:
-            self.client = Client.from_token_file(token_file, api_key, app_secret)
+            try:
+                self.client = auth.client_from_token_file(token_file, api_key, app_secret)
+                if self.console:
+                    self.console.print("✅ Connected using provided credentials", style="green")
+            except Exception as e:
+                if self.console:
+                    self.console.print(f"❌ Failed to connect with provided credentials: {e}", style="red")
+                raise
         else:
-            raise ValueError("Must provide either client or token_file + credentials")
+            missing = []
+            if not token_file: missing.append("token_file")
+            if not api_key: missing.append("api_key") 
+            if not app_secret: missing.append("app_secret")
+            
+            error_msg = f"Missing credentials: {', '.join(missing)}. "
+            error_msg += "Set environment variables (SCHWAB_API_KEY, SCHWAB_APP_SECRET, SCHWAB_TOKEN_PATH) "
+            error_msg += "or provide them directly."
+            raise ValueError(error_msg)
         
         # Initialize EZ Orders with client submit function
         self.ez = EZOrders(
@@ -95,13 +126,29 @@ class SchwabEZTrader:
         self.paper_trading_mode = False
         self._get_account_info()
     
+    def _load_credentials_from_env(self) -> Dict[str, Optional[str]]:
+        """Load Schwab credentials from environment variables"""
+        credentials = {
+            'api_key': os.getenv('SCHWAB_API_KEY'),
+            'app_secret': os.getenv('SCHWAB_APP_SECRET'),
+            'callback_url': os.getenv('SCHWAB_CALLBACK_URL'),
+            'token_path': os.getenv('SCHWAB_TOKEN_PATH')
+        }
+        
+        if self.console and any(credentials.values()):
+            found = [k for k, v in credentials.items() if v]
+            self.console.print(f"🔑 Found environment credentials: {', '.join(found)}", style="cyan")
+        
+        return credentials
+    
     def _get_account_info(self):
         """Get account information"""
         try:
             accounts = self.client.get_account_numbers()
             if accounts.json():
                 # Use first account by default
-                self.account_hash = list(accounts.json().values())[0]
+                print(accounts.json())
+                self.account_hash = accounts.json()[0]['hashValue']
                 if self.console:
                     self.console.print(f"✅ Connected to account: {self.account_hash[:8]}...")
             else:
@@ -592,41 +639,184 @@ class SchwabEZTrader:
             return False
 
 
-# === CONFIGURATION HELPER ===
+# === CONVENIENCE FUNCTIONS ===
+
+def create_trader_from_env(config: Optional[EZConfig] = None) -> 'SchwabEZTrader':
+    """
+    Create trader using only environment variables
+    
+    Required environment variables:
+    - SCHWAB_API_KEY
+    - SCHWAB_APP_SECRET
+    - SCHWAB_TOKEN_PATH
+    
+    Optional:
+    - SCHWAB_CALLBACK_URL
+    """
+    return SchwabEZTrader(config=config, auto_load_credentials=True)
+
+def setup_env_vars_interactively():
+    """
+    Help user set up environment variables interactively
+    Shows the export commands they need to run
+    """
+    console = Console() if RICH_AVAILABLE else None
+    
+    if console:
+        console.print("🔧 Environment Variables Setup", style="bold blue")
+        console.print("This will help you create the export commands for your shell.\n")
+        
+        api_key = Prompt.ask("Enter your Schwab API Key")
+        app_secret = Prompt.ask("Enter your Schwab App Secret", password=True)
+        token_path = Prompt.ask("Enter token file path", default="schwab_token.json")
+        callback_url = Prompt.ask("Enter callback URL", default="https://localhost:8080")
+        
+        console.print("\n📋 Add these to your shell profile (.bashrc, .zshrc, etc.):", style="green bold")
+        console.print(f"export SCHWAB_API_KEY='{api_key}'")
+        console.print(f"export SCHWAB_APP_SECRET='{app_secret}'")
+        console.print(f"export SCHWAB_TOKEN_PATH='{token_path}'")
+        console.print(f"export SCHWAB_CALLBACK_URL='{callback_url}'")
+        
+        console.print("\n💡 Or run these commands in your current session:", style="yellow")
+        console.print(f"export SCHWAB_API_KEY='{api_key}'")
+        console.print(f"export SCHWAB_APP_SECRET='{app_secret}'")
+        console.print(f"export SCHWAB_TOKEN_PATH='{token_path}'")
+        console.print(f"export SCHWAB_CALLBACK_URL='{callback_url}'")
+        
+        console.print("\n✅ After setting these, you can use:", style="green")
+        console.print("from schwab_integration_example import create_trader_from_env")
+        console.print("trader = create_trader_from_env()")
+        
+    else:
+        print("Environment Variables Setup")
+        print("=" * 30)
+        
+        api_key = input("Enter your Schwab API Key: ")
+        app_secret = input("Enter your Schwab App Secret: ")
+        token_path = input("Enter token file path (default: schwab_token.json): ") or "schwab_token.json"
+        callback_url = input("Enter callback URL (default: https://localhost:8080): ") or "https://localhost:8080"
+        
+        print("\nAdd these to your shell profile (.bashrc, .zshrc, etc.):")
+        print(f"export SCHWAB_API_KEY='{api_key}'")
+        print(f"export SCHWAB_APP_SECRET='{app_secret}'")
+        print(f"export SCHWAB_TOKEN_PATH='{token_path}'")
+        print(f"export SCHWAB_CALLBACK_URL='{callback_url}'")
+
+def check_env_setup() -> Dict[str, bool]:
+    """
+    Check which environment variables are set
+    
+    Returns dict with status of each required variable
+    """
+    env_status = {
+        'SCHWAB_API_KEY': bool(os.getenv('SCHWAB_API_KEY')),
+        'SCHWAB_APP_SECRET': bool(os.getenv('SCHWAB_APP_SECRET')),
+        'SCHWAB_TOKEN_PATH': bool(os.getenv('SCHWAB_TOKEN_PATH')),
+        'SCHWAB_CALLBACK_URL': bool(os.getenv('SCHWAB_CALLBACK_URL'))
+    }
+    
+    if RICH_AVAILABLE:
+        console = Console()
+        console.print("🔍 Environment Variables Status:", style="bold blue")
+        
+        for var, is_set in env_status.items():
+            status = "✅ Set" if is_set else "❌ Not Set"
+            style = "green" if is_set else "red"
+            console.print(f"  {var}: {status}", style=style)
+            
+        required_set = env_status['SCHWAB_API_KEY'] and env_status['SCHWAB_APP_SECRET'] and env_status['SCHWAB_TOKEN_PATH']
+        
+        if required_set:
+            console.print("\n✅ All required variables are set!", style="green bold")
+            console.print("You can use: trader = create_trader_from_env()")
+        else:
+            console.print("\n⚠️  Missing required variables", style="yellow")
+            console.print("Run setup_env_vars_interactively() for help")
+    else:
+        print("Environment Variables Status:")
+        for var, is_set in env_status.items():
+            status = "Set" if is_set else "Not Set"
+            print(f"  {var}: {status}")
+    
+    return env_status
 
 def setup_schwab_config(config_file: str = "schwab_config.json") -> Dict[str, str]:
     """
     Interactive setup for Schwab configuration
     
+    First tries to load from environment variables, then prompts user if needed.
+    
+    Environment variables:
+    - SCHWAB_API_KEY
+    - SCHWAB_APP_SECRET  
+    - SCHWAB_CALLBACK_URL
+    - SCHWAB_TOKEN_PATH
+    
     Returns dictionary with configuration values
     """
-    if not RICH_AVAILABLE:
-        print("Rich not available - using basic input")
-        api_key = input("Enter Schwab API Key: ")
-        app_secret = input("Enter Schwab App Secret: ")
-        token_file = input("Enter token file path: ")
-    else:
-        console = Console()
+    
+    console = Console() if RICH_AVAILABLE else None
+    
+    # Try to get credentials from environment first
+    api_key = os.getenv('SCHWAB_API_KEY')
+    app_secret = os.getenv('SCHWAB_APP_SECRET')
+    callback_url = os.getenv('SCHWAB_CALLBACK_URL')
+    token_path = os.getenv('SCHWAB_TOKEN_PATH')
+    
+    if console:
         console.print("🔧 Schwab API Configuration", style="bold blue")
         
-        api_key = Prompt.ask("Enter Schwab API Key")
-        app_secret = Prompt.ask("Enter Schwab App Secret", password=True)
-        token_file = Prompt.ask("Enter token file path", default="schwab_token.json")
+        if any([api_key, app_secret, callback_url, token_path]):
+            found_vars = []
+            if api_key: found_vars.append("SCHWAB_API_KEY")
+            if app_secret: found_vars.append("SCHWAB_APP_SECRET") 
+            if callback_url: found_vars.append("SCHWAB_CALLBACK_URL")
+            if token_path: found_vars.append("SCHWAB_TOKEN_PATH")
+            
+            console.print(f"🔑 Found environment variables: {', '.join(found_vars)}", style="green")
+        else:
+            console.print("⚠️  No environment variables found, will prompt for input", style="yellow")
+    
+    # Prompt for missing values
+    if not RICH_AVAILABLE:
+        if not api_key:
+            api_key = input("Enter Schwab API Key: ")
+        if not app_secret:
+            app_secret = input("Enter Schwab App Secret: ")
+        if not callback_url:
+            callback_url = input("Enter Callback URL (optional): ") or "https://localhost:8080"
+        if not token_path:
+            token_path = input("Enter token file path: ") or "schwab_token.json"
+    else:
+        if not api_key:
+            api_key = Prompt.ask("Enter Schwab API Key")
+        if not app_secret:
+            app_secret = Prompt.ask("Enter Schwab App Secret", password=True)
+        if not callback_url:
+            callback_url = Prompt.ask("Enter Callback URL", default="https://localhost:8080")
+        if not token_path:
+            token_path = Prompt.ask("Enter token file path", default="schwab_token.json")
     
     config = {
         "api_key": api_key,
         "app_secret": app_secret,
-        "token_file": token_file
+        "callback_url": callback_url,
+        "token_file": token_path
     }
     
     # Save config
     with open(config_file, 'w') as f:
         json.dump(config, f, indent=2)
     
-    if RICH_AVAILABLE:
+    if console:
         console.print(f"✅ Configuration saved to {config_file}")
+        console.print("💡 Tip: Set environment variables to avoid prompts:")
+        console.print("   export SCHWAB_API_KEY='your_key'")
+        console.print("   export SCHWAB_APP_SECRET='your_secret'")
+        console.print("   export SCHWAB_TOKEN_PATH='schwab_token.json'")
     else:
         print(f"Configuration saved to {config_file}")
+        print("Tip: Set environment variables SCHWAB_API_KEY, SCHWAB_APP_SECRET, SCHWAB_TOKEN_PATH")
     
     return config
 
@@ -750,22 +940,45 @@ def demo_live_trading():
 
 
 def real_world_examples():
-    """Show real-world usage patterns with preview functionality"""
+    """Show real-world usage patterns with environment variables"""
     
-    print("=== Real-World Usage Examples with Preview ===\n")
+    print("=== Real-World Usage Examples with Environment Variables ===\n")
     
     # This shows how you would use it in practice
     code_examples = """
-# 1. Setup with Enhanced Validation
-trader = SchwabEZTrader(token_file="token.json", api_key="...", app_secret="...")
+# 1. Setup with Environment Variables (Recommended)
+# First, set your environment variables:
+export SCHWAB_API_KEY='your_api_key_here'
+export SCHWAB_APP_SECRET='your_app_secret_here'
+export SCHWAB_TOKEN_PATH='schwab_token.json'
 
-# Enable paper trading for testing
-trader.paper_trade_mode(True)
+# Then use the simple constructor:
+from schwab_integration_example import create_trader_from_env
 
-# 2. Smart Order Submission with Cost Limits
-order = trader.buy('AAPL', 100, limit=150.50)
+trader = create_trader_from_env()
+# Automatically loads credentials from environment
+
+# 2. Check Environment Setup
+from schwab_integration_example import check_env_setup
+
+env_status = check_env_setup()
+if env_status['SCHWAB_API_KEY'] and env_status['SCHWAB_APP_SECRET']:
+    trader = create_trader_from_env()
+else:
+    print("Please set environment variables first")
+
+# 3. Interactive Environment Setup
+from schwab_integration_example import setup_env_vars_interactively
+
+setup_env_vars_interactively()
+# Shows you the exact export commands to run
+
+# 4. Enhanced Validation with Environment Credentials
+trader = create_trader_from_env()
+trader.paper_trade_mode(True)  # Safe testing
 
 # Preview order first to see costs and validation
+order = trader.buy('AAPL', 100, limit=150.50)
 preview = trader.validate_order(order)
 costs = trader.estimate_costs(order)
 print(f"Estimated cost: ${costs['total_cost']:.2f}")
@@ -773,7 +986,9 @@ print(f"Estimated cost: ${costs['total_cost']:.2f}")
 # Submit with automatic validation and cost limits
 response = trader.ez.smart_submit(order, max_cost=5.00)
 
-# 3. Complex Strategy with Preview
+# 5. Complex Strategy with Environment Setup
+trader = create_trader_from_env()
+
 strategy = trader.vertical_spread(
     'AAPL240315C00150000', 
     'AAPL240315C00160000',
@@ -788,7 +1003,10 @@ if trader.smart_order_validation(strategy):
 else:
     print("Strategy failed validation")
 
-# 4. Batch Orders with Error Handling
+# 6. Batch Orders with Environment Credentials
+trader = create_trader_from_env()
+trader.paper_trade_mode(True)  # Safe mode
+
 orders = [
     trader.buy('AAPL', 50, limit=150.00),
     trader.buy('GOOGL', 10, limit=2800.00),
@@ -802,70 +1020,79 @@ responses = trader.ez.batch_submit(
     stop_on_error=True
 )
 
-# 5. Paper Trading Mode
-trader.paper_trading_mode = True
+# 7. Docker/Container Usage
+# In your Dockerfile or docker-compose.yml:
+# environment:
+#   - SCHWAB_API_KEY=your_key
+#   - SCHWAB_APP_SECRET=your_secret
+#   - SCHWAB_TOKEN_PATH=/app/tokens/schwab_token.json
 
-# All orders now use preview endpoint
-order = trader.buy('TSLA', 100)
-result = trader.submit_order(order)  # Uses preview, shows validation results
+# Then in your Python code:
+trader = create_trader_from_env()  # Just works!
 
-# Switch back to live trading
-trader.paper_trading_mode = False
+# 8. CI/CD Pipeline Usage
+# In your GitHub Actions, GitLab CI, etc.:
+# Set environment variables as secrets
+# Then your code just works without hardcoded credentials
 
-# 6. Enhanced Order Validation Example
-def validate_high_risk_order(order_builder):
-    # Get detailed preview
-    preview = trader.preview_order(order_builder.build())
+def main():
+    # Check if environment is set up
+    env_status = check_env_setup()
     
-    # Check validation results
-    validation = preview.get('orderValidationResult', {})
-    
-    # Look for specific risk warnings
-    warns = validation.get('warns', [])
-    high_risk_warnings = [
-        w for w in warns 
-        if 'risk' in w.get('message', '').lower() or 
-           'margin' in w.get('message', '').lower()
-    ]
-    
-    if high_risk_warnings:
-        print("⚠️ High risk order detected:")
-        for warning in high_risk_warnings:
-            print(f"  • {warning['message']}")
+    if all(env_status[var] for var in ['SCHWAB_API_KEY', 'SCHWAB_APP_SECRET', 'SCHWAB_TOKEN_PATH']):
+        # Environment is ready - start trading
+        trader = create_trader_from_env()
+        trader.paper_trade_mode(True)
         
-        confirmation = input("Continue? (y/N): ")
-        return confirmation.lower() == 'y'
-    
-    return True
-
-# Use enhanced validation
-risky_order = trader.sell_short('MEME_STOCK', 1000)
-if validate_high_risk_order(risky_order):
-    trader.submit_order(risky_order)
-
-# 7. Cost Analysis and Optimization
-def analyze_order_costs(orders_list):
-    total_cost = 0
-    for order in orders_list:
-        costs = trader.estimate_costs(order)
-        if 'error' not in costs:
-            total_cost += costs['total_cost']
-            print(f"{order}: ${costs['total_cost']:.2f}")
-    
-    print(f"Total estimated costs: ${total_cost:.2f}")
-    return total_cost
-
-# Analyze costs before submitting
-orders_to_analyze = [
-    trader.buy('AAPL', 100),
-    trader.covered_call('AAPL'),
-    trader.vertical_spread('SPY240315C00400000', 'SPY240315C00420000', 1, 2.00)
-]
-
-total_cost = analyze_order_costs(orders_to_analyze)
-if total_cost < 50.00:  # Cost limit
-    for order in orders_to_analyze:
+        # Your trading logic here
+        order = trader.buy('AAPL', 100, limit=150.00)
         trader.submit_order(order)
+    else:
+        # Environment needs setup
+        print("Environment variables not set. Run:")
+        print("from schwab_integration_example import setup_env_vars_interactively")
+        print("setup_env_vars_interactively()")
+
+# 9. Fallback Pattern (Environment + Manual)
+try:
+    # Try environment first
+    trader = create_trader_from_env()
+    print("✅ Connected using environment variables")
+except ValueError:
+    # Fall back to manual entry
+    print("⚠️ Environment variables not found, using manual setup")
+    config = setup_schwab_config()
+    trader = SchwabEZTrader(
+        token_file=config["token_file"],
+        api_key=config["api_key"],
+        app_secret=config["app_secret"]
+    )
+
+# 10. Automated Trading Script Template
+import os
+import sys
+
+def automated_trading_main():
+    # Verify environment
+    required_vars = ['SCHWAB_API_KEY', 'SCHWAB_APP_SECRET', 'SCHWAB_TOKEN_PATH']
+    missing = [var for var in required_vars if not os.getenv(var)]
+    
+    if missing:
+        print(f"❌ Missing environment variables: {', '.join(missing)}")
+        sys.exit(1)
+    
+    # Connect and trade
+    trader = create_trader_from_env()
+    trader.paper_trade_mode(False)  # Live trading
+    
+    # Your automated strategy here
+    orders = build_daily_strategy()
+    for order in orders:
+        if trader.smart_order_validation(order):
+            trader.submit_order(order)
+            
+if __name__ == "__main__":
+    automated_trading_main()
 """
     
     print(code_examples)
